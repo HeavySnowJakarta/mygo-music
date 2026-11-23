@@ -338,6 +338,8 @@ func Run() error {
 	mygo.App.WhenReady(func() {
 		a.settings = loadSettings()
 		a.settings.applyAppearance()
+		// Before anything fetches: the proxy is read by every request after.
+		a.settings.applyProxy()
 		i18n.SetLanguage(i18n.Resolve(a.settings.Language, systemLanguages()))
 		a.npPane = a.lyricsPaneChosen()
 		if a.settings.PlayerStyle != "" {

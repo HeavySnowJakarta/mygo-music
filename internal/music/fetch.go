@@ -17,9 +17,30 @@ import (
 // Agent is who the app says it is when fetching what it plays and shows.
 const Agent = "MyGoMusic/1.0"
 
+// transport is what every request of the app goes through: covers, streams,
+// what plugins fetch and the model's download. There's one, set for the proxy
+// the settings chose as the app starts, before anything fetches, so that its
+// proxy is only ever written before it's read.
+var transport = &http.Transport{}
+
+// Client is a client going where the proxy lets it, nothing of the web
+// otherwise. Timeout is how long its requests may take: 0 for no limit.
+func Client(timeout time.Duration) *http.Client {
+	return &http.Client{Transport: transport, Timeout: timeout}
+}
+
+// SetProxy makes every request go through proxy, which is asked for each
+// address: nil for straight out, http.ProxyFromEnvironment for the system's
+// proxy, http.ProxyURL for one the listener named. The app calls it as it
+// starts, before anything fetches: a transport written while another
+// goroutine reads it is a data race.
+func SetProxy(proxy func(*http.Request) (*url.URL, error)) {
+	transport.Proxy = proxy
+}
+
 // fetchClient gets covers: they're small, and a slow one shouldn't hold a
 // slot for long.
-var fetchClient = &http.Client{Timeout: 30 * time.Second}
+var fetchClient = Client(30 * time.Second)
 
 // maxFetch is the most a cover may take.
 const maxFetch = 64 << 20

@@ -2,13 +2,22 @@ package app
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/egoist/mygo"
 
 	"mygo-music/internal/i18n"
+	"mygo-music/internal/music"
+	"mygo-music/internal/speech"
 )
 
 // settings are the listener's choices, kept in settings.json in the user
@@ -86,12 +95,93 @@ type settings struct {
 	CacheMB int `json:"cacheMB"`
 	// SearchHistory keeps submitted keywords, most recent first.
 	SearchHistory []string `json:"searchHistory,omitempty"`
+	// ProxyMode is how the app reaches the web (proxyModes): straight out,
+	// the system's proxy, or through ProxyURL. Its zero value is straight
+	// out, as the app always went.
+	ProxyMode string `json:"proxyMode"`
+	// ProxyURL is the proxy custom mode goes through, such as
+	// http://127.0.0.1:7890.
+	ProxyURL string `json:"proxyURL,omitempty"`
 
 	path string // where they were loaded from, and are saved to
 }
 
 func defaultSettings() settings {
+	// No proxy, as the app has always gone. A new field keeps its zero value
+	// here, so that listeners who update land on what they had.
 	return settings{Language: i18n.System, NotchActivity: true, Quality: "high", Appearance: "system", Volume: 0.8, Normalize: true, AppIcon: "dock-and-menubar", CacheMB: 2048}
+}
+
+// proxyModes are how the app reaches the web, by what it goes through, in the
+// order they're offered.
+var proxyModes = []struct{ id, label string }{
+	{"none", N("No Proxy")},
+	{"system", N("System Proxy")},
+	{"custom", N("Custom Proxy")},
+}
+
+// proxyFunc is what the app's requests go through, by the settings. A custom
+// address it can't read leaves requests to go straight out, as none would.
+func (s settings) proxyFunc() func(*http.Request) (*url.URL, error) {
+	switch s.ProxyMode {
+	case "system":
+		return http.ProxyFromEnvironment
+	case "custom":
+		if u, err := parseProxy(s.ProxyURL); err == nil {
+			return http.ProxyURL(u)
+		}
+	}
+	// No proxy: the zero value too, of settings kept before there was a
+	// choice, when the app went straight out.
+	return nil
+}
+
+// proxySchemes are the kinds of proxy the app goes through.
+var proxySchemes = []string{"http", "https", "socks5", "socks5h"}
+
+// parseProxy reads a proxy's address as the listener wrote it, filling in
+// http:// for one that only says where it is. It refuses what couldn't be a
+// proxy here rather than letting it fail later, as a request that can't be
+// made, with nothing said of why.
+func parseProxy(addr string) (*url.URL, error) {
+	addr = strings.TrimSpace(addr)
+	if addr == "" {
+		return nil, errors.New("no proxy address")
+	}
+	// A scheme is letters, digits and +-., with :// after it. Anything else
+	// with a colon, as mailto:x@y, is a host and a port or nothing at all.
+	if !strings.Contains(addr, "://") {
+		if i := strings.IndexByte(addr, ':'); i >= 0 && !isPort(addr[i+1:]) {
+			return nil, fmt.Errorf("%q isn't an address", addr)
+		}
+		addr = "http://" + addr
+	}
+	u, err := url.Parse(addr)
+	if err != nil {
+		return nil, err
+	}
+	if !slices.Contains(proxySchemes, strings.ToLower(u.Scheme)) {
+		return nil, fmt.Errorf("%q isn't a kind of proxy", u.Scheme)
+	}
+	// A proxy is a host and a port: no path to be sent as one.
+	if u.Path != "" && u.Path != "/" || u.RawQuery != "" || u.Fragment != "" {
+		return nil, fmt.Errorf("%q is more than a host and a port", addr)
+	}
+	host := u.Hostname()
+	if host == "" {
+		return nil, errors.New("no proxy host")
+	}
+	// A colon in the host it isn't a host's has nothing after it.
+	if u.Port() == "" && strings.HasSuffix(u.Host, ":") {
+		return nil, fmt.Errorf("%q has no port after its colon", addr)
+	}
+	return u, nil
+}
+
+// isPort reports whether s is a port: digits, and a one a port can be.
+func isPort(s string) bool {
+	n, err := strconv.Atoi(s)
+	return err == nil && n >= 1 && n <= 65535
 }
 
 func settingsPath() (string, error) {
@@ -145,6 +235,18 @@ func (s settings) applyAppearance() {
 	if src != mygo.Theme.Source() {
 		mygo.Theme.SetSource(src)
 	}
+}
+
+// applyProxy makes every request the app sends go through the proxy the
+// settings choose. The app calls it as it starts, before anything fetches:
+// the transport it sets is read by every request after, and setting it again
+// while one is on its way would be a data race, so a change to the settings
+// takes effect the next time the app starts.
+func (s settings) applyProxy() {
+	// Plugins and installs go through the same transport already, as their
+	// clients are made from it.
+	music.SetProxy(s.proxyFunc())
+	speech.Client = music.Client(0)
 }
 
 // qualityLevels are what can be asked of sources, by what they sound like.

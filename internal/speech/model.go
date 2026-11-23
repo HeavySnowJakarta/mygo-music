@@ -201,6 +201,11 @@ func fetch(ctx context.Context, url, path string, f modelFile, got func(int64)) 
 	return os.Rename(part, path)
 }
 
+// Client fetches the model, so that the settings' proxy reaches it. The app
+// sets it as it starts; nil leaves the fetches to the net/http default, as
+// tests that don't download anything have it.
+var Client *http.Client
+
 // get appends what url has from have on to out, which has have bytes of
 // its size, and adds it to h.
 func get(ctx context.Context, url string, out *os.File, h hash.Hash, have, size int64, got func(int64)) error {
@@ -211,7 +216,11 @@ func get(ctx context.Context, url string, out *os.File, h hash.Hash, have, size 
 	if have > 0 {
 		req.Header.Set("Range", "bytes="+strconv.FormatInt(have, 10)+"-")
 	}
-	res, err := http.DefaultClient.Do(req)
+	client := http.DefaultClient
+	if Client != nil {
+		client = Client
+	}
+	res, err := client.Do(req)
 	if err != nil {
 		return err
 	}

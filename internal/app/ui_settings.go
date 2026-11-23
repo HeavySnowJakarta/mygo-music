@@ -369,6 +369,27 @@ func (a *app) settingsSections(c *ui.Context, p palette) []settingsSection {
 				go retroBitmaps() // rendered before Now Playing shows them
 			}
 		})
+		row(T("Proxy"), T("What the app goes through to reach the web, to take effect the next time it starts"), func() {
+			labels := make([]string, len(proxyModes))
+			at := 0
+			for i, pm := range proxyModes {
+				labels[i] = pm.label
+				if pm.id == s.ProxyMode {
+					at = i
+				}
+			}
+			if segmented(c.Key("proxy-mode"), &at, T(labels[0]), T(labels[1]), T(labels[2])) {
+				s.ProxyMode = proxyModes[at].id
+				a.changed()
+			}
+		})
+		// Only the one that goes through an address has one to give.
+		if s.ProxyMode == "custom" {
+			row(T("Proxy Address"), T("Such as http://127.0.0.1:7890, to take effect the next time it starts"), func() {
+				ui.TextInput(c.Key("proxy-url"), &s.ProxyURL).Width(220).FontSize(13).Label(T("Proxy Address")).
+					Placeholder("http://127.0.0.1:7890").OnChange(func() { a.changed() })
+			})
+		}
 		// Only on macOS: elsewhere the icon is always in the notification
 		// area.
 		if runtime.GOOS == "darwin" {
